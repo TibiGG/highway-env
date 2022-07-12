@@ -9,7 +9,7 @@ from highway_env.utils import Vector
 from highway_env.vehicle.behavior import IDMVehicle
 from highway_env.vehicle.dynamics import BicycleVehicle
 from highway_env.vehicle.kinematics import Vehicle
-from highway_env.vehicle.controller import MDPVehicle
+from highway_env.vehicle.controller import MDPVehicle, AVehicle
 
 if TYPE_CHECKING:
     from highway_env.envs.common.abstract import AbstractEnv
@@ -66,6 +66,35 @@ class ActionType(object):
     @controlled_vehicle.setter
     def controlled_vehicle(self, vehicle):
         self.__controlled_vehicle = vehicle
+
+
+class ContinuousAcceleration(ActionType):
+    """
+    An continuous action space for throttle. The steering is controlled by lane following.
+    """
+    ACCELERATION_RANGE = (-5, 5.0)
+    """Acceleration range: [-x, x], in m/s²."""
+
+    def __init__(self,
+                 env: 'AbstractEnv',
+                 **kwargs) -> None:
+        """
+        Create a continuous acceleration space.
+
+        :param env: the environment
+        """
+        super().__init__(env)
+        self.size = 1
+
+    def space(self) -> spaces.Box:
+        return spaces.Box(-1., 1., shape=(self.size,), dtype=np.float32)
+
+    @property
+    def vehicle_class(self) -> Callable:
+        return functools.partial(AVehicle)
+
+    def act(self, action: np.ndarray) -> None:
+        self.controlled_vehicle.act(action[0])
 
 
 class ContinuousAction(ActionType):
@@ -298,6 +327,8 @@ class MultiAgentAction(ActionType):
 def action_factory(env: 'AbstractEnv', config: dict) -> ActionType:
     if config["type"] == "ContinuousAction":
         return ContinuousAction(env, **config)
+    if config["type"] == "ContinuousAcceleration":
+        return ContinuousAcceleration(env, **config)
     if config["type"] == "DiscreteAction":
         return DiscreteAction(env, **config)
     elif config["type"] == "DiscreteMetaAction":

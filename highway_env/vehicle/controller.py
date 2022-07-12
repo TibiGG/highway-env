@@ -313,3 +313,122 @@ class MDPVehicle(ControlledVehicle):
                 if (t % int(trajectory_timestep / dt)) == 0:
                     states.append(copy.deepcopy(v))
         return states
+
+
+class AVehicle(Vehicle):
+    """
+    A vehicle piloted only by the lateral controller,
+    allowing the acceleration to be controlled by the policy
+    """
+
+    """Characteristic time"""
+    TAU_HEADING = 0.2  # [s]
+    TAU_LATERAL = 0.6  # [s]
+
+    TAU_PURSUIT = 0.5 * TAU_HEADING  # [s]
+    KP_LATERAL = 1 / TAU_LATERAL  # [1/s]
+    MAX_STEERING_ANGLE = np.pi / 3  # [rad]
+    KP_HEADING = 1 / TAU_HEADING
+
+    def __init__(self,
+                 road: Road,
+                 position: Vector,
+                 heading: float = 0,
+                 speed: float = 0,
+                 target_lane_index: LaneIndex = None,
+                 acceleration: float = None,
+                 route: Route = None):
+        super().__init__(road, position, heading, speed)
+        self.target_lane_index = target_lane_index or self.lane_index
+        self.acceleration = acceleration or self.action["acceleration"]
+        self.route = route
+
+    @classmethod
+    def create_from(cls, vehicle: "AVehicle") -> "AVehicle":
+        """
+        Create a new vehicle from an existing one.
+
+        The vehicle dynamics and target dynamics are copied, other properties are default.
+
+        :param vehicle: a vehicle
+        :return: a new vehicle at the same dynamical state
+        """
+        v = cls(vehicle.road, vehicle.position, heading=vehicle.heading, speed=vehicle.speed,
+                target_lane_index=vehicle.target_lane_index, acceleration=vehicle.acceleration,
+                route=vehicle.route)
+        return v
+
+    def plan_route_to(self, destination: str) -> "ControlledVehicle":
+        """
+        Plan a route to a destination in the road network
+
+        :param destination: a node in the road network
+        """
+        try:
+            path = self.road.network.shortest_path(self.lane_index[1], destination)
+        except KeyError:
+            path = []
+        if path:
+            self.route = [self.lane_index] + [(path[i], path[i + 1], None) for i in range(len(path) - 1)]
+        else:
+            self.route = [self.lane_index]
+        return self
+
+    def act(self, action: Union[float, dict, str] = None) -> None:
+        """
+        Perform a high-level action to change the desired lane or speed.
+
+        - If a high-level action is provided, update the target speed and lane;
+        - then, perform longitudinal and lateral control.
+
+        :param action: a high-level action
+        """
+        self.follow_road()
+
+        if action:
+            assert(type(action) is float)
+            self.acceleration = action
+
+        action = {"steering": self.steering_control(self.target_lane_index),
+                  "acceleration": self.acceleration}
+
+        action['steering'] = np.clip(action['steering'], -self.MAX_STEERING_ANGLE, self.MAX_STEERING_ANGLE)
+        super().act(action)
+
+    def follow_road(self) -> None:
+        """At the end of a lane, automatically switch to a next one."""
+        if self.road.network.get_lane(self.target_lane_index).after_end(self.position):
+            self.target_lane_index = self.road.network.next_lane(self.target_lane_index,
+                                                                 route=self.route,
+                                                                 position=self.position,
+                                                                 np_random=self.road.np_random)
+
+    def steering_control(self, target_lane_index: LaneIndex) -> float:
+        """
+        Steer the vehicle to follow the center of an given lane.
+
+        1. Lateral position is controlled by a proportional controller yielding a lateral speed command
+        2. Lateral speed command is converted to a heading reference
+        3. Heading is controlled by a proportional controller yielding a heading rate command
+        4. Heading rate command is converted to a steering angle
+
+        :param target_lane_index: index of the lane to follow
+        :return: a steering wheel angle command [rad]
+        """
+        target_lane = self.road.network.get_lane(target_lane_index)
+        lane_coords = target_lane.local_coordinates(self.position)
+        lane_next_coords = lane_coords[0] + self.speed * self.TAU_PURSUIT
+        lane_future_heading = target_lane.heading_at(lane_next_coords)
+
+        # Lateral position control
+        lateral_speed_command = - self.KP_LATERAL * lane_coords[1]
+        # Lateral speed to heading
+        heading_command = np.arcsin(np.clip(lateral_speed_command / utils.not_zero(self.speed), -1, 1))
+        heading_ref = lane_future_heading + np.clip(heading_command, -np.pi/4, np.pi/4)
+        # Heading control
+        heading_rate_command = self.KP_HEADING * utils.wrap_to_pi(heading_ref - self.heading)
+        # Heading rate to steering angle
+        slip_angle = np.arcsin(np.clip(self.LENGTH / 2 / utils.not_zero(self.speed) * heading_rate_command, -1, 1))
+        steering_angle = np.arctan(2 * np.tan(slip_angle))
+        steering_angle = np.clip(steering_angle, -self.MAX_STEERING_ANGLE, self.MAX_STEERING_ANGLE)
+        return float(steering_angle)

@@ -190,7 +190,8 @@ class IntersectionEnv(AbstractEnv):
         self.controlled_vehicles = []
         for ego_id in range(0, self.config["controlled_vehicles"]):
             ego_lane = self.road.network.get_lane(("o{}".format(ego_id % 4), "ir{}".format(ego_id % 4), 0))
-            destination = self.config["destination"] or "o" + str(self.np_random.randint(1, 4))
+            # destination = self.config["destination"] or "o" + str(self.np_random.randint(1, 4))
+            destination = "o1"
             ego_vehicle = self.action_type.vehicle_class(
                              self.road,
                              ego_lane.position(60 + 5*self.np_random.randn(1), 0),
@@ -283,11 +284,7 @@ class ContinuousIntersectionEnv(IntersectionEnv):
                 "features": ["presence", "x", "y", "vx", "vy", "long_off", "lat_off", "ang_off"],
             },
             "action": {
-                "type": "ContinuousAction",
-                "steering_range": [-np.pi / 3, np.pi / 3],
-                "longitudinal": True,
-                "lateral": True,
-                "dynamical": True
+                "type": "ContinuousAcceleration",
             },
         })
         return config
